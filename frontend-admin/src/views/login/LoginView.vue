@@ -1,53 +1,29 @@
 <script setup lang="ts">
-/**
- * 登录视图组件
- * 
- * ⚠️ MOCK 实现说明：
- * ────────────────────────────────────────────────────────────────────
- * 本组件使用模拟的 OTP 验证逻辑，仅用于开发和演示。
- * 
- * 测试账号信息：
- *   - 用户名：admin 或 user
- *   - OTP 验证码：123456（固定值）
- * 
- * 生产环境部署前需要：
- *   1. 对接真实的 OTP 验证服务
- *   2. 实现真实的用户认证 API
- *   3. 添加防暴力破解机制
- * ────────────────────────────────────────────────────────────────────
- */
-
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Key, Lock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
-import { verifyOtp, validateOtpFormat, getMockConfig } from '@/utils/otp'
+import { verifyOtp, validateOtpFormat } from '@/utils/otp'
 import { logger } from '@/utils/logger'
 import { handleError, ErrorType } from '@/utils/error-handler'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { UserInfo } from '@/types'
 
-// 创建登录模块专用日志记录器
 const loginLogger = logger.createLogger('Login')
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
 
-// 表单引用
 const formRef = ref<FormInstance>()
 
-// 表单数据
 const loginForm = reactive({
   username: '',
   otpCode: ''
 })
 
-// 加载状态
 const loading = ref(false)
 
-// 验证规则
 const rules: FormRules = {
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
@@ -68,30 +44,10 @@ const rules: FormRules = {
   ]
 }
 
-// 组件挂载时记录日志
 onMounted(() => {
   loginLogger.info('登录页面已加载')
-  
-  // 开发环境下输出 Mock 配置信息
-  const mockConfig = getMockConfig()
-  if (mockConfig) {
-    loginLogger.debug('⚠️ Mock 模式已启用', {
-      hint: '有效用户名: ' + mockConfig.validUsers.join(', '),
-      otpHint: '有效验证码: ' + mockConfig.validCode
-    })
-  }
 })
 
-/**
- * 登录处理函数
- * 
- * 处理流程：
- * 1. 表单验证
- * 2. OTP 验证
- * 3. 生成 Token 和用户信息（⚠️ MOCK）
- * 4. 保存登录状态
- * 5. 跳转到目标页面
- */
 async function handleLogin() {
   if (!formRef.value) return
   
@@ -105,7 +61,6 @@ async function handleLogin() {
     loginLogger.info('开始登录流程', { username: loginForm.username })
     
     try {
-      // 验证 OTP
       const result = await verifyOtp(loginForm.username, loginForm.otpCode)
       
       if (!result.valid) {
@@ -115,7 +70,6 @@ async function handleLogin() {
           errorType: result.errorType 
         })
         
-        // 根据错误类型显示不同的提示
         if (result.errorType === ErrorType.NETWORK) {
           ElMessage.error('网络连接失败，请检查网络设置')
         } else if (result.errorType === ErrorType.TIMEOUT) {
@@ -126,46 +80,36 @@ async function handleLogin() {
         return
       }
       
-      loginLogger.info('OTP 验证通过，准备生成登录凭证', { username: loginForm.username })
-      
-      /**
-       * ⚠️ MOCK: 模拟生成 token 和用户信息
-       * 
-       * 【注意】这是硬编码的测试数据！
-       * 生产环境中应该：
-       *   1. 从后端 API 获取真实的 JWT Token
-       *   2. 从后端获取用户信息
-       *   3. Token 应该由后端安全签发
-       */
-      const mockToken = `token_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-      const mockUser: UserInfo = {
-        id: loginForm.username === 'admin' ? '1' : '2',
-        username: loginForm.username,
-        nickname: loginForm.username === 'admin' ? '系统管理员' : '普通用户',
-        email: `${loginForm.username}@example.com`,
-        role: loginForm.username === 'admin' ? 'admin' : 'user',
-        permissions: loginForm.username === 'admin' 
-          ? ['dashboard', 'users', 'settings', 'profile'] 
-          : ['dashboard', 'profile']
+      if (!result.token || !result.user) {
+        loginLogger.error('OTP 验证成功但缺少必要数据', { 
+          username: loginForm.username,
+          hasToken: !!result.token,
+          hasUser: !!result.user
+        })
+        ElMessage.error('登录响应数据异常，请稍后重试')
+        return
       }
       
-      // 保存登录状态
-      userStore.login(mockToken, mockUser)
-      loginLogger.info('登录成功，用户状态已保存', { 
-        username: mockUser.username, 
-        role: mockUser.role 
+      loginLogger.info('OTP 验证通过，保存登录状态', { 
+        username: result.user.username,
+        role: result.user.role
+      })
+      
+      userStore.login(result.token, result.user)
+      
+      loginLogger.info('登录成功', { 
+        username: result.user.username, 
+        role: result.user.role 
       })
       
       ElMessage.success('登录成功')
       
-      // 跳转到目标页面
       const redirect = route.query.redirect as string
       const targetPath = redirect || '/dashboard'
       loginLogger.debug('准备跳转到目标页面', { targetPath })
       router.push(targetPath)
       
     } catch (error) {
-      // 使用统一的错误处理机制
       const errorResult = handleError(error, '登录')
       loginLogger.error('登录过程发生异常', { 
         error, 
@@ -173,7 +117,6 @@ async function handleLogin() {
         message: errorResult.message 
       })
       
-      // 根据错误类型显示不同的错误提示
       switch (errorResult.type) {
         case ErrorType.NETWORK:
           ElMessage.error('网络连接失败，请检查您的网络设置后重试')
@@ -197,9 +140,6 @@ async function handleLogin() {
   })
 }
 
-/**
- * 重置表单
- */
 function resetForm() {
   formRef.value?.resetFields()
   loginLogger.debug('登录表单已重置')
@@ -208,16 +148,13 @@ function resetForm() {
 
 <template>
   <div class="login-container">
-    <!-- 背景装饰 -->
     <div class="bg-decoration">
       <div class="circle circle-1"></div>
       <div class="circle circle-2"></div>
       <div class="circle circle-3"></div>
     </div>
     
-    <!-- 登录卡片 -->
     <div class="login-card">
-      <!-- Logo和标题 -->
       <div class="login-header">
         <div class="logo">
           <el-icon :size="48" color="#409eff">
@@ -228,7 +165,6 @@ function resetForm() {
         <p class="subtitle">使用动态密码安全登录</p>
       </div>
       
-      <!-- 登录表单 -->
       <el-form
         ref="formRef"
         :model="loginForm"
@@ -280,7 +216,6 @@ function resetForm() {
       </el-form>
     </div>
     
-    <!-- 版权信息 -->
     <div class="copyright">
       © 2024 OTP管理系统. All rights reserved.
     </div>
@@ -502,5 +437,3 @@ function resetForm() {
   color: #94a3b8;
 }
 </style>
-
-
