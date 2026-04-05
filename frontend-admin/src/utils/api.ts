@@ -20,6 +20,51 @@ export interface RequestOptions {
 
 const DEFAULT_TIMEOUT = 10000
 
+function getStatusMessage(status: number): string {
+  const statusMessages: Record<number, string> = {
+    400: '请求参数错误',
+    401: '未授权，请重新登录',
+    403: '没有权限访问',
+    404: '请求的资源不存在',
+    405: '请求方法不允许',
+    500: '服务器内部错误',
+    502: '网关错误',
+    503: '服务不可用',
+    504: '网关超时'
+  }
+  return statusMessages[status] || `请求失败 (${status})`
+}
+
+async function parseResponse<T>(response: Response): Promise<ApiResponse<T>> {
+  const contentType = response.headers.get('content-type') || ''
+  const isJson = contentType.includes('application/json')
+
+  if (!isJson) {
+    const text = await response.text()
+    apiLogger.warn('响应不是 JSON 格式', { 
+      status: response.status, 
+      contentType,
+      textPreview: text.substring(0, 200)
+    })
+
+    return {
+      success: false,
+      message: getStatusMessage(response.status)
+    }
+  }
+
+  try {
+    const data = await response.json()
+    return data as ApiResponse<T>
+  } catch (error) {
+    apiLogger.error('JSON 解析失败', { error })
+    return {
+      success: false,
+      message: '响应数据格式错误'
+    }
+  }
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestOptions = {}
@@ -47,7 +92,7 @@ async function request<T>(
 
     clearTimeout(timeoutId)
 
-    const data = await response.json()
+    const data = await parseResponse<T>(response)
 
     if (!response.ok) {
       apiLogger.warn(`请求失败`, { 
@@ -58,12 +103,12 @@ async function request<T>(
       
       return {
         success: false,
-        message: data.message || `请求失败: ${response.status}`
+        message: data.message || getStatusMessage(response.status)
       }
     }
 
     apiLogger.debug(`请求成功`, { method, url })
-    return data as ApiResponse<T>
+    return data
 
   } catch (error) {
     clearTimeout(timeoutId)
@@ -80,7 +125,7 @@ async function request<T>(
     if (errorResult.type === ErrorType.TIMEOUT) {
       message = '请求超时，请稍后重试'
     } else if (errorResult.type === ErrorType.NETWORK) {
-      message = '网络连接失败，请检查网络设置'
+      message = '网络连接失败，请检查网络设置或后端服务是否启动'
     }
 
     return {
